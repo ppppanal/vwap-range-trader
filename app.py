@@ -119,8 +119,13 @@ def build_chart(df, state) -> go.Figure:
 
 
 def require_password() -> bool:
-    """若設定 APP_PASSWORD 環境變數則要求登入。"""
+    """若設定 APP_PASSWORD（env 或 Streamlit secrets）則要求登入。"""
     password = os.environ.get("APP_PASSWORD", "").strip()
+    if not password:
+        try:
+            password = str(st.secrets.get("APP_PASSWORD", "")).strip()
+        except Exception:
+            password = ""
     if not password:
         return True
     if st.session_state.get("authed"):
