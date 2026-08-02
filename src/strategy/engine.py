@@ -12,6 +12,7 @@ import pandas as pd
 from src.indicators.core import (
     count_vwap_crosses,
     detect_trend_bias,
+    find_aux_breakpoint,
     find_touch_levels,
 )
 
@@ -70,6 +71,16 @@ class StrategyState:
     break_count_high: int = 0
     break_count_low: int = 0
     trend_bias: str = "neutral"
+    # 1D 輔助線：abs high/low → breakpoint
+    aux_valid: bool = False
+    abs_high: Optional[float] = None
+    abs_high_time: Optional[str] = None
+    abs_low: Optional[float] = None
+    abs_low_time: Optional[str] = None
+    breakpoint_price: Optional[float] = None
+    breakpoint_time: Optional[str] = None
+    breakpoint_volume: Optional[float] = None
+    breakpoint_kind: Optional[str] = None
     signal: Signal = field(default_factory=Signal)
     notes: list[str] = field(default_factory=list)
 
@@ -520,6 +531,18 @@ class StrategyEngine:
         if range_paused and mode == MarketMode.RANGE:
             mode = MarketMode.PAUSED_LOW_VOL
 
+        # 1D 輔助線：absolute high/low → breakpoint（最大量 + 趨勢反轉）
+        aux_bars = int(self.cfg.get("aux_line", {}).get("lookback_hours", 24) * 60 / 5)
+        aux = find_aux_breakpoint(df, lookback_bars=max(aux_bars, 48))
+        if aux.get("valid"):
+            notes.append(
+                f"1D 輔助線 breakpoint @ {float(aux['breakpoint_price']):.2f} "
+                f"({aux.get('breakpoint_kind')}, vol={float(aux['breakpoint_volume']):.1f})"
+            )
+
+        def _ts(v) -> Optional[str]:
+            return None if v is None else str(v)
+
         self._active_signal = signal
 
         return StrategyState(
@@ -547,6 +570,15 @@ class StrategyEngine:
             break_count_high=len(self._break_high_events),
             break_count_low=len(self._break_low_events),
             trend_bias=bias,
+            aux_valid=bool(aux.get("valid")),
+            abs_high=aux.get("abs_high"),
+            abs_high_time=_ts(aux.get("abs_high_time")),
+            abs_low=aux.get("abs_low"),
+            abs_low_time=_ts(aux.get("abs_low_time")),
+            breakpoint_price=aux.get("breakpoint_price"),
+            breakpoint_time=_ts(aux.get("breakpoint_time")),
+            breakpoint_volume=aux.get("breakpoint_volume"),
+            breakpoint_kind=aux.get("breakpoint_kind"),
             signal=signal,
             notes=notes,
         )

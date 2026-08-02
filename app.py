@@ -73,7 +73,7 @@ def build_chart(df, state) -> go.Figure:
         shared_xaxes=True,
         vertical_spacing=0.04,
         row_heights=[0.72, 0.28],
-        subplot_titles=("5m 已收線 · VWAP · Range（突破≥5次線位）", "成交量 (BTC)"),
+        subplot_titles=("5m 已收線 · VWAP · Range · 1D Aux→Breakpoint", "成交量 (BTC)"),
     )
     fig.add_trace(
         go.Candlestick(
@@ -114,6 +114,52 @@ def build_chart(df, state) -> go.Figure:
             line_dash="dash",
             line_color="#27ae60",
             annotation_text=f"Range Low ×{state.low_touches}",
+            row=1,
+            col=1,
+        )
+
+    # 1D 輔助線：absolute high/low → breakpoint
+    if getattr(state, "aux_valid", False) and state.breakpoint_price is not None:
+        bp_t = pd.to_datetime(state.breakpoint_time, utc=True)
+        bp_p = float(state.breakpoint_price)
+        if state.abs_high is not None and state.abs_high_time is not None:
+            ah_t = pd.to_datetime(state.abs_high_time, utc=True)
+            fig.add_trace(
+                go.Scatter(
+                    x=[ah_t, bp_t],
+                    y=[float(state.abs_high), bp_p],
+                    mode="lines+markers",
+                    name="Aux AbsHigh→BP",
+                    line=dict(color="#f472b6", width=2, dash="solid"),
+                    marker=dict(size=8),
+                ),
+                row=1,
+                col=1,
+            )
+        if state.abs_low is not None and state.abs_low_time is not None:
+            al_t = pd.to_datetime(state.abs_low_time, utc=True)
+            fig.add_trace(
+                go.Scatter(
+                    x=[al_t, bp_t],
+                    y=[float(state.abs_low), bp_p],
+                    mode="lines+markers",
+                    name="Aux AbsLow→BP",
+                    line=dict(color="#38bdf8", width=2, dash="solid"),
+                    marker=dict(size=8),
+                ),
+                row=1,
+                col=1,
+            )
+        fig.add_trace(
+            go.Scatter(
+                x=[bp_t],
+                y=[bp_p],
+                mode="markers+text",
+                name="Breakpoint",
+                marker=dict(size=12, color="#fbbf24", symbol="diamond"),
+                text=["BP"],
+                textposition="top center",
+            ),
             row=1,
             col=1,
         )
@@ -228,6 +274,22 @@ def render_signal_panel(state, suggested_size: float) -> None:
         f"Width={_fmt_px(state.range_width)} · ATR={state.atr:.2f} · "
         f"Break H/L={state.break_count_high}/{state.break_count_low} · 趨勢={state.trend_bias}"
     )
+
+    if getattr(state, "aux_valid", False):
+        st.markdown("##### 1D 輔助線 / Breakpoint")
+        a1, a2, a3 = st.columns(3)
+        a1.metric("Abs High", _fmt_px(state.abs_high))
+        a2.metric("Abs Low", _fmt_px(state.abs_low))
+        a3.metric("Breakpoint", _fmt_px(state.breakpoint_price))
+        vol_txt = (
+            f"{state.breakpoint_volume:.1f}"
+            if state.breakpoint_volume is not None
+            else "—"
+        )
+        st.caption(
+            f"BP 時間 {state.breakpoint_time or '—'} · "
+            f"種類 {state.breakpoint_kind or '—'} · 量 {vol_txt}"
+        )
 
     if state.notes:
         with st.expander("筆記", expanded=False):

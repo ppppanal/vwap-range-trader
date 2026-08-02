@@ -41,4 +41,8 @@ breakout:
   max_breaks_to_watch: 2      # first/second break
   trailing_enabled: true
 
+# 1D 輔助線：absolute high/low → breakpoint（最大量 + 趨勢反轉）
+aux_line:
+  lookback_hours: 24
+
 refresh_seconds: 30

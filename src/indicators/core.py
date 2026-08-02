@@ -243,6 +243,134 @@ def find_touch_levels(
     }
 
 
+def find_aux_breakpoint(
+    df: pd.DataFrame,
+    *,
+    lookback_bars: int = 288,
+    pivot_left: int = 2,
+    pivot_right: int = 2,
+) -> dict:
+    """
+    1D 輔助線：
+    - 起點：absolute high / absolute low（唔係突破線位 range high/low）
+    - 終點 breakpoint：喺 abs high~low 價帶／時間窗內，
+      「最大成交量」且屬 K 線趨勢反轉（swing high/low）嘅位置
+    """
+    empty = {
+        "valid": False,
+        "abs_high": None,
+        "abs_high_time": None,
+        "abs_low": None,
+        "abs_low_time": None,
+        "breakpoint_price": None,
+        "breakpoint_time": None,
+        "breakpoint_volume": None,
+        "breakpoint_kind": None,  # swing_high / swing_low
+    }
+    if df is None or df.empty:
+        return empty
+
+    seg = df.iloc[-lookback_bars:] if len(df) >= lookback_bars else df.copy()
+    if len(seg) < pivot_left + pivot_right + 3:
+        return empty
+
+    abs_high_i = int(seg["high"].values.argmax())
+    abs_low_i = int(seg["low"].values.argmin())
+    abs_high = float(seg["high"].iloc[abs_high_i])
+    abs_low = float(seg["low"].iloc[abs_low_i])
+    abs_high_time = seg.index[abs_high_i]
+    abs_low_time = seg.index[abs_low_i]
+
+    # 時間窗：abs high 同 abs low 之間（含兩端），若同一根就用成段 1D
+    t0 = min(abs_high_i, abs_low_i)
+    t1 = max(abs_high_i, abs_low_i)
+    if t1 - t0 < 3:
+        t0, t1 = 0, len(seg) - 1
+
+    window = seg.iloc[t0 : t1 + 1]
+    # 價帶：absolute high/low 之間（range 實體）
+    band_hi = abs_high
+    band_lo = abs_low
+
+    candidates: list[dict] = []
+    h = window["high"].values
+    l = window["low"].values
+    c = window["close"].values
+    v = window["volume"].values
+    n = len(window)
+
+    for i in range(pivot_left, n - pivot_right):
+        # 價要喺 abs range 內（容許掂到邊界）
+        px_hi = float(h[i])
+        px_lo = float(l[i])
+        if px_hi < band_lo or px_lo > band_hi:
+            continue
+
+        is_swing_high = px_hi >= h[i - pivot_left : i + pivot_right + 1].max()
+        is_swing_low = px_lo <= l[i - pivot_left : i + pivot_right + 1].min()
+        if not (is_swing_high or is_swing_low):
+            continue
+
+        # 趨勢反轉確認：swing 前後收市方向改變
+        prev_dir = 0
+        next_dir = 0
+        if i > 0:
+            prev_dir = 1 if c[i - 1] > c[max(0, i - 3)] else (-1 if c[i - 1] < c[max(0, i - 3)] else 0)
+        if i < n - 1:
+            next_dir = 1 if c[min(n - 1, i + 2)] > c[i] else (-1 if c[min(n - 1, i + 2)] < c[i] else 0)
+
+        reversal = False
+        kind = None
+        if is_swing_high and (prev_dir >= 0 and next_dir <= 0):
+            reversal = True
+            kind = "swing_high"
+        if is_swing_low and (prev_dir <= 0 and next_dir >= 0):
+            # 若同時係 high/low，用量決定；否則低位反轉
+            if not reversal or float(v[i]) >= (candidates[-1]["volume"] if candidates else 0):
+                reversal = True
+                kind = "swing_low"
+
+        if not reversal:
+            continue
+
+        price = px_hi if kind == "swing_high" else px_lo
+        candidates.append(
+            {
+                "price": float(price),
+                "time": window.index[i],
+                "volume": float(v[i]),
+                "kind": kind,
+            }
+        )
+
+    if not candidates:
+        # fallback：窗內最大量 K，用 close 做 breakpoint
+        j = int(window["volume"].values.argmax())
+        candidates.append(
+            {
+                "price": float(window["close"].iloc[j]),
+                "time": window.index[j],
+                "volume": float(window["volume"].iloc[j]),
+                "kind": "max_volume",
+            }
+        )
+
+    bp = max(candidates, key=lambda x: x["volume"])
+
+    return {
+        "valid": True,
+        "abs_high": abs_high,
+        "abs_high_time": abs_high_time,
+        "abs_low": abs_low,
+        "abs_low_time": abs_low_time,
+        "breakpoint_price": bp["price"],
+        "breakpoint_time": bp["time"],
+        "breakpoint_volume": bp["volume"],
+        "breakpoint_kind": bp["kind"],
+        "lookback_bars": len(seg),
+    }
+
+
 def detect_trend_bias(df: pd.DataFrame, vwap: pd.Series, lookback: int = 48) -> str:
     """搵唔到 range 時判斷單邊升/跌。"""
     seg = df.iloc[-lookback:]
