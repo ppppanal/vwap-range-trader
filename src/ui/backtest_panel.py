@@ -31,6 +31,62 @@ def _fmt_hkt(ts) -> str:
     return t.tz_convert(_TZ_HKT).strftime("%m/%d %H:%M")
 
 
+def _prepare_trades_display(
+    trade_list: list,
+    *,
+    base_notional: float | None = None,
+    fee_rate: float | None = None,
+) -> pd.DataFrame:
+    """確保表格一定有 pnl_before_fee / fee / pnl_after_fee。"""
+    df = pd.DataFrame(trade_list)
+    if df.empty:
+        return df
+
+    # 統一淨值欄
+    if "pnl_usdt" not in df.columns:
+        df["pnl_usdt"] = 0.0
+
+    # 補 gross / fee
+    if "gross_pnl_usdt" not in df.columns or "fee_usdt" not in df.columns:
+        # 若有 size_mult + 手續費率，可重算 round-trip fee
+        if (
+            base_notional is not None
+            and fee_rate is not None
+            and "size_mult" in df.columns
+        ):
+            rt = float(fee_rate) * 2.0
+            fee = df["size_mult"].astype(float) * float(base_notional) * rt
+            df["fee_usdt"] = fee
+            df["gross_pnl_usdt"] = df["pnl_usdt"].astype(float) + fee
+        else:
+            if "gross_pnl_usdt" not in df.columns:
+                df["gross_pnl_usdt"] = df["pnl_usdt"]
+            if "fee_usdt" not in df.columns:
+                df["fee_usdt"] = (
+                    df["gross_pnl_usdt"].astype(float) - df["pnl_usdt"].astype(float)
+                )
+
+    df["gross_pnl_usdt"] = df["gross_pnl_usdt"].astype(float).round(4)
+    df["fee_usdt"] = df["fee_usdt"].astype(float).round(4)
+    df["pnl_usdt"] = df["pnl_usdt"].astype(float).round(4)
+
+    if "entry_time" in df.columns:
+        df["entry_time"] = df["entry_time"].map(_fmt_hkt)
+    if "exit_time" in df.columns:
+        df["exit_time"] = df["exit_time"].map(_fmt_hkt)
+
+    df = df.rename(
+        columns={
+            "entry_time": "entry_time (GMT+8)",
+            "exit_time": "exit_time (GMT+8)",
+            "gross_pnl_usdt": "pnl_before_fee",
+            "fee_usdt": "fee",
+            "pnl_usdt": "pnl_after_fee",
+        }
+    )
+    return df
+
+
 def _equity_curve(result: BacktestResult) -> pd.DataFrame:
     rows = []
     eq = 0.0
@@ -42,7 +98,13 @@ def _equity_curve(result: BacktestResult) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
+def _render_result(
+    result: BacktestResult,
+    *,
+    key_prefix: str = "bt",
+    base_notional: float | None = None,
+    fee_rate: float | None = None,
+) -> None:
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Trades", result.trades)
     m2.metric("Win rate", f"{result.win_rate:.1f}%")
@@ -83,18 +145,11 @@ def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
         st.plotly_chart(fig, use_container_width=True, key=f"{key_prefix}_equity")
 
     if result.trade_list:
-        trades_df = pd.DataFrame(result.trade_list)
-        if "entry_time" in trades_df.columns:
-            trades_df["entry_time"] = trades_df["entry_time"].map(_fmt_hkt)
-        if "exit_time" in trades_df.columns:
-            trades_df["exit_time"] = trades_df["exit_time"].map(_fmt_hkt)
-        # 欄位名標明時區
-        rename = {}
-        if "entry_time" in trades_df.columns:
-            rename["entry_time"] = "entry_time (GMT+8)"
-        if "exit_time" in trades_df.columns:
-            rename["exit_time"] = "exit_time (GMT+8)"
-        trades_df = trades_df.rename(columns=rename)
+        trades_df = _prepare_trades_display(
+            result.trade_list,
+            base_notional=base_notional,
+            fee_rate=fee_rate,
+        )
         show_cols = [
             c
             for c in [
@@ -108,27 +163,17 @@ def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
                 "take_profit",
                 "size_mult",
                 "pnl_pct",
-                "gross_pnl_usdt",
-                "fee_usdt",
-                "pnl_usdt",
+                "pnl_before_fee",
+                "fee",
+                "pnl_after_fee",
                 "exit_reason",
                 "reason",
             ]
             if c in trades_df.columns
         ]
-        rename_more = {}
-        if "gross_pnl_usdt" in trades_df.columns:
-            rename_more["gross_pnl_usdt"] = "pnl_before_fee"
-        if "pnl_usdt" in trades_df.columns:
-            rename_more["pnl_usdt"] = "pnl_after_fee"
-        if "fee_usdt" in trades_df.columns:
-            rename_more["fee_usdt"] = "fee"
-        if rename_more:
-            trades_df = trades_df.rename(columns=rename_more)
-            show_cols = [rename_more.get(c, c) for c in show_cols]
         st.caption(
             "Entry / Exit：Month/Day HH:MM（GMT+8）· "
-            "pnl_before_fee＝未扣手續費 · pnl_after_fee＝扣費後"
+            "pnl_before_fee＝未扣手續費 · fee＝手續費 · pnl_after_fee＝扣費後"
         )
         st.dataframe(trades_df[show_cols], use_container_width=True, height=360)
         st.download_button(
@@ -236,6 +281,7 @@ def render_backtest_tab(cfg: dict, *, default_notional: float = 1000.0) -> None:
                     "min_touches": cfg.get("range", {}).get("min_touches"),
                     "touch_tol": cfg.get("range", {}).get("touch_tolerance_pct"),
                     "sl_atr_mult": cfg.get("range", {}).get("sl_atr_mult"),
+                    "fee_rate": cfg.get("range", {}).get("fee_rate"),
                 },
             )
         st.session_state.bt_last_result = result
@@ -261,4 +307,12 @@ def render_backtest_tab(cfg: dict, *, default_notional: float = 1000.0) -> None:
                 else ""
             )
         )
-    _render_result(st.session_state.bt_last_result, key_prefix=f"view_{view_id or 'session'}")
+    fee_rate = meta.get("fee_rate")
+    if fee_rate is None:
+        fee_rate = cfg.get("range", {}).get("fee_rate", 0.00045)
+    _render_result(
+        st.session_state.bt_last_result,
+        key_prefix=f"view_{view_id or 'session'}",
+        base_notional=float(meta["notional"]) if meta.get("notional") is not None else float(default_notional),
+        fee_rate=float(fee_rate),
+    )
