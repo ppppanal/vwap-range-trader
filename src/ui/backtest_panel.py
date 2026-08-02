@@ -115,7 +115,8 @@ def _render_result(
 
     st.caption(
         f"{result.symbol} · {result.start} → {result.end} · bars={result.bars} · "
-        f"fees={result.fees_usdt:,.2f} · label={result.label}"
+        f"gross={result.gross_pnl_usdt:,.2f} · fees={result.fees_usdt:,.2f} · "
+        f"net={result.net_pnl_usdt:,.2f} · label={result.label}"
     )
 
     if result.by_type:
