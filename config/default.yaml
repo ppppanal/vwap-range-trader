@@ -22,8 +22,8 @@ intercept:
   max_6h: 10
 
 range:
-  touch_tolerance_pct: 0.15   # 掂到 high/low 嘅容差 %（相對價格）
-  min_touches: 5
+  touch_tolerance_pct: 0.15   # 同一線位聚類／突破容差 %（相對價格）
+  min_touches: 5              # 同一線位突破／穿梭至少幾次先算 range high/low
   lookback_hours: 24
   entry_buffer_pct: 0.05      # range 寬度嘅 5% 做 entry buffer
   min_range_fee_mult: 5.0     # range 要大過 5x 手續費

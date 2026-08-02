@@ -1,3 +1,3 @@
-from .core import compute_indicators
+from .core import compute_indicators, drop_incomplete_candle, find_touch_levels
 
-__all__ = ["compute_indicators"]
+__all__ = ["compute_indicators", "drop_incomplete_candle", "find_touch_levels"]

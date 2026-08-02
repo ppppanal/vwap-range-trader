@@ -13,8 +13,10 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import yaml
 
+import pandas as pd
+
 from src.data.binance import LAST_SOURCE, fetch_klines_hours, fetch_ticker_24h
-from src.indicators.core import compute_indicators
+from src.indicators.core import compute_indicators, drop_incomplete_candle
 from src.strategy.engine import StrategyEngine
 from src.ui.shared_params import PARAM_KEYS, default_params, load_shared, save_shared
 
@@ -62,6 +64,7 @@ def merge_ui_cfg(base: dict, ui: dict) -> dict:
 
 
 def build_chart(df, state) -> go.Figure:
+    # 圖只顯示最近 24h（288 根已收線 5m）
     show = df.iloc[-min(len(df), 288) :].copy()
     fig = make_subplots(
         rows=2,
@@ -69,7 +72,7 @@ def build_chart(df, state) -> go.Figure:
         shared_xaxes=True,
         vertical_spacing=0.04,
         row_heights=[0.72, 0.28],
-        subplot_titles=("價格 / VWAP / Range", "成交量 (BTC)"),
+        subplot_titles=("5m 已收線 · VWAP · Range（突破≥5次線位）", "成交量 (BTC)"),
     )
     fig.add_trace(
         go.Candlestick(
@@ -78,7 +81,7 @@ def build_chart(df, state) -> go.Figure:
             high=show["high"],
             low=show["low"],
             close=show["close"],
-            name="5m",
+            name="5m closed",
             increasing_line_color="#2ecc71",
             decreasing_line_color="#e74c3c",
         ),
@@ -96,9 +99,23 @@ def build_chart(df, state) -> go.Figure:
         col=1,
     )
     if state.range_high is not None:
-        fig.add_hline(y=state.range_high, line_dash="dash", line_color="#e74c3c", annotation_text="Range High", row=1, col=1)
+        fig.add_hline(
+            y=state.range_high,
+            line_dash="dash",
+            line_color="#e74c3c",
+            annotation_text=f"Range High ×{state.high_touches}",
+            row=1,
+            col=1,
+        )
     if state.range_low is not None:
-        fig.add_hline(y=state.range_low, line_dash="dash", line_color="#27ae60", annotation_text="Range Low", row=1, col=1)
+        fig.add_hline(
+            y=state.range_low,
+            line_dash="dash",
+            line_color="#27ae60",
+            annotation_text=f"Range Low ×{state.low_touches}",
+            row=1,
+            col=1,
+        )
 
     sig = state.signal
     if sig.entry is not None:
@@ -122,7 +139,99 @@ def build_chart(df, state) -> go.Figure:
         template="plotly_dark",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
+    fig.update_xaxes(type="date", row=1, col=1)
     return fig
+
+
+def _fmt_px(v) -> str:
+    if v is None:
+        return "—"
+    return f"{float(v):,.2f}"
+
+
+def render_signal_panel(state, suggested_size: float) -> None:
+    """右邊訊號可視化面板。"""
+    sig = state.signal
+    side = sig.side or "flat"
+    side_meta = {
+        "long": ("做多 LONG", "#1e8449", "#d5f5e3"),
+        "short": ("做空 SHORT", "#922b21", "#fadbd8"),
+        "flat": ("觀望 FLAT", "#1a5276", "#d4e6f1"),
+    }
+    title, accent, soft = side_meta.get(side, side_meta["flat"])
+    trade_type = (sig.trade_type or state.mode or "—").upper()
+
+    rr = "—"
+    risk = None
+    reward = None
+    if sig.entry is not None and sig.stop_loss is not None and sig.take_profit is not None:
+        risk = abs(float(sig.entry) - float(sig.stop_loss))
+        reward = abs(float(sig.take_profit) - float(sig.entry))
+        if risk > 0:
+            rr = f"{reward / risk:.2f}R"
+
+    st.markdown(
+        f"""
+<div style="border:1px solid {accent}; background:linear-gradient(180deg,{soft}22,#111827); border-radius:12px; padding:14px 16px; margin-bottom:12px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+    <div style="font-size:1.35rem; font-weight:800; color:{accent};">{title}</div>
+    <div style="background:{accent}; color:#fff; padding:4px 10px; border-radius:999px; font-size:0.8rem; font-weight:700;">{trade_type}</div>
+  </div>
+  <div style="color:#9ca3af; margin-top:6px; font-size:0.9rem;">{sig.reason or "等候觸發條件"}</div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Entry", _fmt_px(sig.entry))
+    m2.metric("Stop Loss", _fmt_px(sig.stop_loss))
+    m3.metric("Take Profit", _fmt_px(sig.take_profit))
+
+    m4, m5, m6 = st.columns(3)
+    m4.metric("Trailing SL", _fmt_px(sig.trailing_sl))
+    m5.metric("倉位倍數", f"{float(sig.size_mult or 0):.2f}×")
+    m6.metric("建議名義", f"{suggested_size:,.0f}")
+
+    if risk is not None and reward is not None:
+        st.progress(min(1.0, reward / (risk + reward) if (risk + reward) > 0 else 0.0), text=f"風險回報 · {rr}")
+
+    st.markdown("##### Range 線位（24h 突破≥5次）")
+    ok = "✅" if state.range_valid and state.range_vs_fee_ok else "⏳" if state.range_valid else "❌"
+    r1, r2 = st.columns(2)
+    with r1:
+        st.markdown(
+            f"""
+<div style="background:#1f2937;border-radius:10px;padding:12px;border-left:4px solid #e74c3c;">
+  <div style="color:#f87171;font-size:0.8rem;">RANGE HIGH</div>
+  <div style="font-size:1.3rem;font-weight:700;color:#fff;">{_fmt_px(state.range_high)}</div>
+  <div style="color:#9ca3af;font-size:0.8rem;">突破 {state.high_touches} 次</div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with r2:
+        st.markdown(
+            f"""
+<div style="background:#1f2937;border-radius:10px;padding:12px;border-left:4px solid #27ae60;">
+  <div style="color:#6ee7b7;font-size:0.8rem;">RANGE LOW</div>
+  <div style="font-size:1.3rem;font-weight:700;color:#fff;">{_fmt_px(state.range_low)}</div>
+  <div style="color:#9ca3af;font-size:0.8rem;">突破 {state.low_touches} 次</div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.caption(
+        f"{ok} 有效={state.range_valid} · 手續費OK={state.range_vs_fee_ok} · "
+        f"Width={_fmt_px(state.range_width)} · ATR={state.atr:.2f} · "
+        f"Break H/L={state.break_count_high}/{state.break_count_low} · 趨勢={state.trend_bias}"
+    )
+
+    if state.notes:
+        with st.expander("筆記", expanded=False):
+            for n in state.notes:
+                st.markdown(f"- {n}")
 
 
 def require_password() -> bool:
@@ -252,8 +361,8 @@ with st.sidebar:
     st.number_input("6h 交叉上限", 1, 40, step=1, key="p_max_intercept_6h")
 
     st.subheader("Range")
-    st.number_input("掂位容差 %", 0.01, 1.0, step=0.01, key="p_touch_tol")
-    st.number_input("最少掂次數", 2, 20, step=1, key="p_min_touches")
+    st.number_input("線位容差 %", 0.01, 1.0, step=0.01, key="p_touch_tol")
+    st.number_input("同一線位最少突破次數", 2, 20, step=1, key="p_min_touches")
     st.number_input("Entry buffer（range%）", 0.01, 0.3, step=0.01, key="p_entry_buffer_pct")
     st.number_input("Range ≥ Nx 手續費", 1.0, 20.0, step=0.5, key="p_min_range_fee_mult")
     st.number_input("單邊手續費率", 0.0001, 0.002, step=0.0001, format="%.4f", key="p_fee_rate")
@@ -359,7 +468,7 @@ if not enabled:
     st.stop()
 
 
-@st.cache_data(ttl=25, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def _cached_klines(sym: str, hours: int):
     return fetch_klines_hours(symbol=sym, interval="5m", hours=int(hours))
 
@@ -367,7 +476,12 @@ def _cached_klines(sym: str, hours: int):
 try:
     with st.spinner(f"抓取 {symbol} 5m K 線…"):
         raw = _cached_klines(symbol, int(lookback_hours))
-    df = compute_indicators(raw, cfg)
+    # 只使用已收線嘅 5 分鐘 candle；未滿 5 分鐘嘅 forming bar 唔計入策略／圖表
+    closed = drop_incomplete_candle(raw, interval_minutes=5)
+    if closed is None or len(closed) < 30:
+        st.error("已收線 5m K 線不足，請稍後再試。")
+        st.stop()
+    df = compute_indicators(closed, cfg)
     state = st.session_state.engine.evaluate(df)
     st.session_state.last_vwap = state.vwap
 except Exception as e:
@@ -377,8 +491,25 @@ except Exception as e:
 sig = state.signal
 suggested_size = base_notional * float(sig.size_mult or state.size_mult)
 
+# 下一支 5m candle 倒數
+now_utc = pd.Timestamp.now(tz="UTC")
+last_closed_open = df.index[-1]
+if last_closed_open.tzinfo is None:
+    last_closed_open = last_closed_open.tz_localize("UTC")
+next_candle_open = last_closed_open + pd.Timedelta(minutes=5)
+# 下一支「新 candle 出現」= 而家 forming 嗰支收線時刻 = next_candle_open + 5m
+# 實際上：last closed open 係 T，forming 係 T+5m，收線於 T+10m 先變成新 closed
+forming_open = next_candle_open
+forming_close_at = forming_open + pd.Timedelta(minutes=5)
+secs_left = max(0, int((forming_close_at - now_utc).total_seconds()))
+mm, ss = divmod(secs_left, 60)
+st.caption(
+    f"⏱ 5m candle · 只用已收線 · 上一支 `{last_closed_open.strftime('%H:%M')} UTC` · "
+    f"新 candle 仲有 **{mm:02d}:{ss:02d}**"
+)
+
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric(f"{pair_label}（5m close）", f"{state.price:,.2f}")
+c1.metric(f"{pair_label}（5m 收線）", f"{state.price:,.2f}")
 c2.metric("24h VWAP", f"{state.vwap:,.2f}", f"{state.vwap_dist_pct:+.3f}%")
 c3.metric("市場模式", state.mode)
 c4.metric("強弱", state.strength)
@@ -394,54 +525,12 @@ st.divider()
 left, right = st.columns([1.35, 1])
 
 with left:
-    st.subheader("圖表")
+    st.subheader("圖表（24h · 5m 已收線）")
     st.plotly_chart(build_chart(df, state), use_container_width=True)
 
 with right:
-    st.subheader("訊號")
-    side_label = {"long": "做多 LONG", "short": "做空 SHORT", "flat": "觀望 FLAT"}.get(sig.side, sig.side)
-    if sig.side == "long":
-        st.success(side_label)
-    elif sig.side == "short":
-        st.error(side_label)
-    else:
-        st.info(side_label)
-
-    st.write(
-        {
-            "類型": sig.trade_type or "—",
-            "Entry": None if sig.entry is None else round(sig.entry, 2),
-            "Stop Loss": None if sig.stop_loss is None else round(sig.stop_loss, 2),
-            "Take Profit": None if sig.take_profit is None else round(sig.take_profit, 2),
-            "Trailing SL": None if sig.trailing_sl is None else round(sig.trailing_sl, 2),
-            "倉位倍數": round(float(sig.size_mult or 0), 3),
-            "原因": sig.reason or "—",
-        }
-    )
-
-    st.subheader("Range 狀態")
-    st.write(
-        {
-            "有效": state.range_valid,
-            "手續費檢驗": state.range_vs_fee_ok,
-            "High": state.range_high,
-            "Low": state.range_low,
-            "Width": None if state.range_width is None else round(state.range_width, 2),
-            "High 掂次數": state.high_touches,
-            "Low 掂次數": state.low_touches,
-            "ATR": round(state.atr, 2),
-            "Break High 次數": state.break_count_high,
-            "Break Low 次數": state.break_count_low,
-            "趨勢偏向": state.trend_bias,
-        }
-    )
-
-    st.subheader("筆記")
-    if state.notes:
-        for n in state.notes:
-            st.markdown(f"- {n}")
-    else:
-        st.caption("無額外說明")
+    st.subheader("訊號面板")
+    render_signal_panel(state, suggested_size)
 
 st.divider()
 with st.expander("策略邏輯摘要", expanded=False):
@@ -449,12 +538,13 @@ with st.expander("策略邏輯摘要", expanded=False):
         """
 1. **強弱**：現價對 24h rolling VWAP 嘅距離 % → 控制倉位倍數。
 2. **Continuation**：6h 交叉 < 上限 且 4h 交叉 < 上限 → breakout/延續偏向。
-3. **Range**：過去 24h 高低位喺容差內掂夠次數先算有效；range 要 > Nx 手續費。
+3. **Range**：24h 圖入面搵「同一線位突破／穿梭 ≥5 次」做 high/low；range 要 > Nx 手續費。
 4. **Range Entry**：buffer = width × entry%；short = high−buffer，long = low+buffer；SL = high/low ± ATR 倍數；TP = 對側 entry。
 5. **低量暫停**：5m 量 < 門檻 且低過 avg，連續 N 次 → 停 range，轉等 breakout/reversal。
 6. **Breakout/Reversal**：first/second break 且量 < 5×avg → 等下一支；同向量縮跟進，或反向放量做反轉。
 7. **無 Range**：改睇單邊升/跌（trend / continuation）。
-8. **參數同步**：側邊欄參數寫入共用檔，所有連線約數秒內自動對齊。
+8. **5m Candle**：策略同圖表只用已收線 K；未滿 5 分鐘嘅 forming bar 唔計，收線後先出新一支。
+9. **參數同步**：側邊欄參數寫入共用檔，所有連線約數秒內自動對齊。
         """
     )
 

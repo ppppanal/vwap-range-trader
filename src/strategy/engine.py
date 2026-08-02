@@ -381,7 +381,7 @@ class StrategyEngine:
             else:
                 notes.append("Range 細過 5x 手續費，唔做 range trade")
         else:
-            notes.append("搵唔到有效 range（高低位掂次數不足）")
+            notes.append("搵唔到有效 range（24h 內無同一線位突破≥門檻次數）")
 
         # volume pause
         streak = self._update_low_vol_streak(vol, vol_avg)
