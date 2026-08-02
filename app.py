@@ -13,7 +13,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import yaml
 
-from src.data.binance import fetch_klines_hours, fetch_ticker_24h
+from src.data.binance import LAST_SOURCE, fetch_klines_hours, fetch_ticker_24h
 from src.indicators.core import compute_indicators
 from src.strategy.engine import StrategyEngine
 from src.ui.shared_params import PARAM_KEYS, default_params, load_shared, save_shared
@@ -339,7 +339,7 @@ if live_track:
         24h H {ticker['high']:,.0f} · L {ticker['low']:,.0f} · Vol {ticker['volume']:,.0f} BTC
       </div>
       <div style="color:#6c879a; font-size:0.75rem;">
-        更新 {ticker['asof'].strftime('%H:%M:%S')} UTC · 來源 Binance {symbol}
+        更新 {ticker['asof'].strftime('%H:%M:%S')} UTC · 來源 {ticker.get('source') or 'market'} · {symbol}
       </div>
     </div>
   </div>
@@ -458,5 +458,8 @@ with st.expander("策略邏輯摘要", expanded=False):
         """
     )
 
-st.caption(f"資料截至 {df.index[-1]} · {symbol} · 僅訊號參考，非自動下單")
+src_note = LAST_SOURCE.get("klines") or LAST_SOURCE.get("ticker") or "—"
+st.caption(
+    f"資料截至 {df.index[-1]} · {symbol} · K線來源 {src_note} · 僅訊號參考，非自動下單"
+)
 _ = run_btn
