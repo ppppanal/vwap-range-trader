@@ -430,7 +430,7 @@ with st.sidebar:
     st.number_input("同一線位最少突破次數", 2, 20, step=1, key="p_min_touches")
     st.number_input("Entry buffer（range%）", 0.01, 0.3, step=0.01, key="p_entry_buffer_pct")
     st.number_input("Range ≥ Nx 手續費", 1.0, 20.0, step=0.5, key="p_min_range_fee_mult")
-    st.number_input("單邊手續費率", 0.0001, 0.002, step=0.0001, format="%.4f", key="p_fee_rate")
+    st.number_input("單次手續費率（0.045%=0.00045）", 0.0001, 0.002, step=0.00005, format="%.5f", key="p_fee_rate")
     st.number_input("ATR 週期", 5, 50, step=1, key="p_atr_period")
     st.number_input("SL ATR 倍數", 0.5, 3.0, step=0.05, key="p_sl_atr_mult")
 

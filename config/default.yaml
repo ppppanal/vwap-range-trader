@@ -27,7 +27,7 @@ range:
   lookback_hours: 24
   entry_buffer_pct: 0.05      # range 寬度嘅 5% 做 entry buffer
   min_range_fee_mult: 5.0     # range 要大過 5x 手續費
-  fee_rate: 0.0004            # 單邊手續費（約 0.04%）
+  fee_rate: 0.00045           # 單邊／單次交易手續費 0.045%
   atr_period: 14
   sl_atr_mult: 1.05
 
