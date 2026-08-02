@@ -6,5 +6,7 @@ __pycache__/
 config/shared_params.json
 config/shared_params.tmp
 backtest_results.json
+data/backtest_history.json
+data/backtest_history.tmp
 *.log
 .DS_Store
