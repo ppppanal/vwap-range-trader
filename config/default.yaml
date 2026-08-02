@@ -1,0 +1,44 @@
+symbol: BTCUSDT
+interval: 5m
+lookback_hours: 36
+
+vwap:
+  rolling_hours: 24
+
+strength:
+  # 現價相對 VWAP 距離 %，用於倉位縮放
+  size_near_pct: 0.15      # |距離| < 此值 → 較大倉
+  size_mid_pct: 0.40
+  size_far_pct: 0.80
+  size_near: 1.0
+  size_mid: 0.6
+  size_far: 0.3
+  size_extreme: 0.1
+
+intercept:
+  window_4h_bars: 48      # 4h / 5min
+  window_6h_bars: 72
+  max_4h: 5
+  max_6h: 10
+
+range:
+  touch_tolerance_pct: 0.15   # 掂到 high/low 嘅容差 %（相對價格）
+  min_touches: 5
+  lookback_hours: 24
+  entry_buffer_pct: 0.05      # range 寬度嘅 5% 做 entry buffer
+  min_range_fee_mult: 5.0     # range 要大過 5x 手續費
+  fee_rate: 0.0004            # 單邊手續費（約 0.04%）
+  atr_period: 14
+  sl_atr_mult: 1.05
+
+volume:
+  min_btc_threshold: 20.0     # <20 BTC/5min
+  avg_period: 20
+  low_vol_consecutive: 3      # 連續 x 次低過 avg 就停 range
+  breakout_max_vol_mult: 5.0  # breakout 量 < 5x avg 先跟
+
+breakout:
+  max_breaks_to_watch: 2      # first/second break
+  trailing_enabled: true
+
+refresh_seconds: 30

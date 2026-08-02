@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: vwap-range-trader
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
+    envVars:
+      - key: APP_PASSWORD
+        generateValue: true
+      - key: PARAM_SYNC_SECONDS
+        value: "3"
+      - key: SHARED_PARAMS_PATH
+        value: /opt/render/project/src/config/shared_params.json
+      - key: STREAMLIT_BROWSER_GATHER_USAGE_STATS
+        value: "false"
+    healthCheckPath: /_stcore/health

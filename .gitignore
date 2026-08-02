@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.streamlit/secrets.toml
+config/shared_params.json
+config/shared_params.tmp
+backtest_results.json
+*.log
+.DS_Store
