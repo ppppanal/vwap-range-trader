@@ -24,7 +24,9 @@ class Trade:
     take_profit: float
     size_mult: float
     pnl_pct: float
-    pnl_usdt: float
+    gross_pnl_usdt: float  # 未扣手續費
+    pnl_usdt: float  # 扣費後淨 PnL
+    fee_usdt: float
     reason: str
     exit_reason: str
 
@@ -168,7 +170,9 @@ def run_backtest(
                         take_profit=open_tp,
                         size_mult=open_size,
                         pnl_pct=pnl_pct,
+                        gross_pnl_usdt=gross,
                         pnl_usdt=net,
+                        fee_usdt=fee,
                         reason=open_reason,
                         exit_reason=exit_reason if (hit_sl or hit_tp) else "max_hold",
                     )

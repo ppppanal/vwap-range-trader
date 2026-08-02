@@ -78,8 +78,27 @@ def dict_to_result(payload: dict[str, Any]) -> BacktestResult:
         max_drawdown_usdt=float(r.get("max_drawdown_usdt", 0)),
         avg_pnl_pct=float(r.get("avg_pnl_pct", 0)),
         by_type=r.get("by_type") or {},
-        trade_list=r.get("trade_list") or [],
+        trade_list=_normalize_trades(r.get("trade_list") or []),
     )
+
+
+def _normalize_trades(trades: list) -> list:
+    """舊存檔可能冇 gross_pnl_usdt / fee_usdt，補齊顯示欄。"""
+    out = []
+    for t in trades:
+        row = dict(t)
+        if "gross_pnl_usdt" not in row:
+            # 舊資料：pnl_usdt 當時已係淨值，無法還原就當相同
+            row["gross_pnl_usdt"] = row.get("pnl_usdt", 0)
+        if "fee_usdt" not in row:
+            try:
+                row["fee_usdt"] = float(row.get("gross_pnl_usdt", 0)) - float(
+                    row.get("pnl_usdt", 0)
+                )
+            except (TypeError, ValueError):
+                row["fee_usdt"] = 0.0
+        out.append(row)
+    return out
 
 
 def save_run(result: BacktestResult, *, meta: Optional[dict] = None) -> dict[str, Any]:

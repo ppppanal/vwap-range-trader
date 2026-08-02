@@ -43,16 +43,17 @@ def _equity_curve(result: BacktestResult) -> pd.DataFrame:
 
 
 def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
-    m1, m2, m3, m4, m5 = st.columns(5)
+    m1, m2, m3, m4, m5, m6 = st.columns(6)
     m1.metric("Trades", result.trades)
     m2.metric("Win rate", f"{result.win_rate:.1f}%")
-    m3.metric("Net PnL", f"{result.net_pnl_usdt:,.2f}")
-    m4.metric("Max DD", f"{result.max_drawdown_usdt:,.2f}")
-    m5.metric("Avg PnL%", f"{result.avg_pnl_pct:.3f}%")
+    m3.metric("PnL（未扣費）", f"{result.gross_pnl_usdt:,.2f}")
+    m4.metric("PnL（扣費後）", f"{result.net_pnl_usdt:,.2f}")
+    m5.metric("Max DD", f"{result.max_drawdown_usdt:,.2f}")
+    m6.metric("Avg PnL%", f"{result.avg_pnl_pct:.3f}%")
 
     st.caption(
         f"{result.symbol} · {result.start} → {result.end} · bars={result.bars} · "
-        f"fees={result.fees_usdt:,.2f} · gross={result.gross_pnl_usdt:,.2f} · label={result.label}"
+        f"fees={result.fees_usdt:,.2f} · label={result.label}"
     )
 
     if result.by_type:
@@ -107,13 +108,28 @@ def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
                 "take_profit",
                 "size_mult",
                 "pnl_pct",
+                "gross_pnl_usdt",
+                "fee_usdt",
                 "pnl_usdt",
                 "exit_reason",
                 "reason",
             ]
             if c in trades_df.columns
         ]
-        st.caption("Entry / Exit 時間格式：Month/Day HH:MM（GMT+8）")
+        rename_more = {}
+        if "gross_pnl_usdt" in trades_df.columns:
+            rename_more["gross_pnl_usdt"] = "pnl_before_fee"
+        if "pnl_usdt" in trades_df.columns:
+            rename_more["pnl_usdt"] = "pnl_after_fee"
+        if "fee_usdt" in trades_df.columns:
+            rename_more["fee_usdt"] = "fee"
+        if rename_more:
+            trades_df = trades_df.rename(columns=rename_more)
+            show_cols = [rename_more.get(c, c) for c in show_cols]
+        st.caption(
+            "Entry / Exit：Month/Day HH:MM（GMT+8）· "
+            "pnl_before_fee＝未扣手續費 · pnl_after_fee＝扣費後"
+        )
         st.dataframe(trades_df[show_cols], use_container_width=True, height=360)
         st.download_button(
             "下載 trades CSV",
