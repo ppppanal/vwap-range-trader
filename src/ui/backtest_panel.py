@@ -18,6 +18,18 @@ from src.ui.backtest_store import (
     save_run,
 )
 
+_TZ_HKT = "Asia/Hong_Kong"
+
+
+def _fmt_hkt(ts) -> str:
+    """顯示做 Month/Day HH:MM（GMT+8）。"""
+    if ts is None or (isinstance(ts, float) and pd.isna(ts)):
+        return "—"
+    t = pd.to_datetime(ts, utc=True, errors="coerce")
+    if pd.isna(t):
+        return str(ts)
+    return t.tz_convert(_TZ_HKT).strftime("%m/%d %H:%M")
+
 
 def _equity_curve(result: BacktestResult) -> pd.DataFrame:
     rows = []
@@ -71,11 +83,22 @@ def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
 
     if result.trade_list:
         trades_df = pd.DataFrame(result.trade_list)
+        if "entry_time" in trades_df.columns:
+            trades_df["entry_time"] = trades_df["entry_time"].map(_fmt_hkt)
+        if "exit_time" in trades_df.columns:
+            trades_df["exit_time"] = trades_df["exit_time"].map(_fmt_hkt)
+        # 欄位名標明時區
+        rename = {}
+        if "entry_time" in trades_df.columns:
+            rename["entry_time"] = "entry_time (GMT+8)"
+        if "exit_time" in trades_df.columns:
+            rename["exit_time"] = "exit_time (GMT+8)"
+        trades_df = trades_df.rename(columns=rename)
         show_cols = [
             c
             for c in [
-                "entry_time",
-                "exit_time",
+                "entry_time (GMT+8)",
+                "exit_time (GMT+8)",
                 "side",
                 "trade_type",
                 "entry",
@@ -90,10 +113,11 @@ def _render_result(result: BacktestResult, *, key_prefix: str = "bt") -> None:
             ]
             if c in trades_df.columns
         ]
+        st.caption("Entry / Exit 時間格式：Month/Day HH:MM（GMT+8）")
         st.dataframe(trades_df[show_cols], use_container_width=True, height=360)
         st.download_button(
             "下載 trades CSV",
-            data=trades_df.to_csv(index=False).encode("utf-8-sig"),
+            data=trades_df[show_cols].to_csv(index=False).encode("utf-8-sig"),
             file_name=f"backtest_{result.label}.csv",
             mime="text/csv",
             key=f"{key_prefix}_download",
