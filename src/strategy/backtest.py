@@ -8,7 +8,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.indicators.core import compute_indicators
+from src.indicators.core import compute_indicators, drop_incomplete_candle
 from src.strategy.engine import StrategyEngine
 
 
@@ -66,7 +66,8 @@ def run_backtest(
     用完整 raw OHLCV 做指標，再由 warmup 開始逐根評估並模擬倉位。
     同一時間最多一倉；觸及 SL/TP 或逾時平倉。
     """
-    df = compute_indicators(raw, cfg)
+    clean = drop_incomplete_candle(raw, interval_minutes=5)
+    df = compute_indicators(clean, cfg)
     engine = StrategyEngine(cfg)
     fee_rate = float(cfg["range"]["fee_rate"])
     fee_pct = _round_trip_fee_pct(fee_rate)

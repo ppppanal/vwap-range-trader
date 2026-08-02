@@ -18,6 +18,7 @@ import pandas as pd
 from src.data.binance import LAST_SOURCE, fetch_klines_hours, fetch_ticker_24h
 from src.indicators.core import compute_indicators, drop_incomplete_candle
 from src.strategy.engine import StrategyEngine
+from src.ui.backtest_panel import render_backtest_tab
 from src.ui.shared_params import PARAM_KEYS, default_params, load_shared, save_shared
 
 # 顯示用：Binance BTCUSDT ≈ BTC/USD
@@ -318,7 +319,9 @@ except ImportError:
     )
 
 st.title("VWAP Range Trader")
-st.caption("5m candle · 24h rolling VWAP · Live Track BTC/USD · 參數即時共用同步")
+st.caption("5m candle · 24h rolling VWAP · Live Track · Backtest · 參數即時共用同步")
+
+tab_live, tab_bt = st.tabs(["即時訊號", "Backtest"])
 
 with st.sidebar:
     st.header("控制面板")
@@ -421,14 +424,21 @@ if live_track:
 if auto_refresh:
     st.sidebar.caption(f"策略/K線 cache ~{min(25, refresh_seconds)}s")
 
-# —— Live Track 報價條（唔使等 5m K 線）——
-if live_track:
-    try:
-        ticker = fetch_ticker_24h(symbol)
-        live_price = ticker["price"]
-        chg = ticker["change_pct"]
-        st.markdown(
-            f"""
+
+@st.cache_data(ttl=20, show_spinner=False)
+def _cached_klines(sym: str, hours: int):
+    return fetch_klines_hours(symbol=sym, interval="5m", hours=int(hours))
+
+
+with tab_live:
+    # —— Live Track 報價條 ——
+    if live_track:
+        try:
+            ticker = fetch_ticker_24h(symbol)
+            live_price = ticker["price"]
+            chg = ticker["change_pct"]
+            st.markdown(
+                f"""
 <div style="
   background: linear-gradient(90deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
   border: 1px solid #3d5a6c; border-radius: 10px; padding: 14px 18px; margin-bottom: 12px;
@@ -453,89 +463,70 @@ if live_track:
     </div>
   </div>
 </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        # 相對 VWAP 即時距離（用上一輪策略 VWAP 若有）
-        if "last_vwap" in st.session_state and st.session_state.last_vwap:
-            dist = (live_price - st.session_state.last_vwap) / st.session_state.last_vwap * 100.0
-            st.caption(f"現價 vs 24h VWAP：{dist:+.3f}%（VWAP {st.session_state.last_vwap:,.2f}）")
-    except Exception as e:
-        st.warning(f"Live Track 暫時拎唔到報價：{e}")
+                """,
+                unsafe_allow_html=True,
+            )
+            if "last_vwap" in st.session_state and st.session_state.last_vwap:
+                dist = (live_price - st.session_state.last_vwap) / st.session_state.last_vwap * 100.0
+                st.caption(f"現價 vs 24h VWAP：{dist:+.3f}%（VWAP {st.session_state.last_vwap:,.2f}）")
+        except Exception as e:
+            st.warning(f"Live Track 暫時拎唔到報價：{e}")
 
-if not enabled:
-    st.warning("策略評估已關閉。打開側邊欄「啟用策略評估」後再開始。")
-    st.stop()
+    if not enabled:
+        st.warning("策略評估已關閉。打開側邊欄「啟用策略評估」後再開始。")
+    else:
+        try:
+            with st.spinner(f"抓取 {symbol} 5m K 線…"):
+                raw = _cached_klines(symbol, int(lookback_hours))
+            closed = drop_incomplete_candle(raw, interval_minutes=5)
+            if closed is None or len(closed) < 30:
+                st.error("已收線 5m K 線不足，請稍後再試。")
+            else:
+                df = compute_indicators(closed, cfg)
+                state = st.session_state.engine.evaluate(df)
+                st.session_state.last_vwap = state.vwap
 
+                sig = state.signal
+                suggested_size = base_notional * float(sig.size_mult or state.size_mult)
 
-@st.cache_data(ttl=20, show_spinner=False)
-def _cached_klines(sym: str, hours: int):
-    return fetch_klines_hours(symbol=sym, interval="5m", hours=int(hours))
+                now_utc = pd.Timestamp.now(tz="UTC")
+                last_closed_open = df.index[-1]
+                if last_closed_open.tzinfo is None:
+                    last_closed_open = last_closed_open.tz_localize("UTC")
+                forming_close_at = last_closed_open + pd.Timedelta(minutes=10)
+                secs_left = max(0, int((forming_close_at - now_utc).total_seconds()))
+                mm, ss = divmod(secs_left, 60)
+                st.caption(
+                    f"⏱ 5m candle · 只用已收線 · 上一支 `{last_closed_open.strftime('%H:%M')} UTC` · "
+                    f"新 candle 仲有 **{mm:02d}:{ss:02d}**"
+                )
 
+                c1, c2, c3, c4, c5 = st.columns(5)
+                c1.metric(f"{pair_label}（5m 收線）", f"{state.price:,.2f}")
+                c2.metric("24h VWAP", f"{state.vwap:,.2f}", f"{state.vwap_dist_pct:+.3f}%")
+                c3.metric("市場模式", state.mode)
+                c4.metric("強弱", state.strength)
+                c5.metric("建議倉位", f"{suggested_size:,.0f} USDT", f"×{state.size_mult:.2f}")
 
-try:
-    with st.spinner(f"抓取 {symbol} 5m K 線…"):
-        raw = _cached_klines(symbol, int(lookback_hours))
-    # 只使用已收線嘅 5 分鐘 candle；未滿 5 分鐘嘅 forming bar 唔計入策略／圖表
-    closed = drop_incomplete_candle(raw, interval_minutes=5)
-    if closed is None or len(closed) < 30:
-        st.error("已收線 5m K 線不足，請稍後再試。")
-        st.stop()
-    df = compute_indicators(closed, cfg)
-    state = st.session_state.engine.evaluate(df)
-    st.session_state.last_vwap = state.vwap
-except Exception as e:
-    st.error(f"載入失敗：{e}")
-    st.stop()
+                c6, c7, c8, c9 = st.columns(4)
+                c6.metric("4h VWAP 交叉", state.intercept_4h, "continuation" if state.continuation else "choppy")
+                c7.metric("6h VWAP 交叉", state.intercept_6h)
+                c8.metric("量 / Avg", f"{state.vol:.1f}", f"avg {state.vol_avg:.1f}")
+                c9.metric("低量連續", state.low_vol_streak, "暫停 Range" if state.range_paused else "正常")
 
-sig = state.signal
-suggested_size = base_notional * float(sig.size_mult or state.size_mult)
+                st.divider()
+                left, right = st.columns([1.35, 1])
+                with left:
+                    st.subheader("圖表（24h · 5m 已收線）")
+                    st.plotly_chart(build_chart(df, state), use_container_width=True)
+                with right:
+                    st.subheader("訊號面板")
+                    render_signal_panel(state, suggested_size)
 
-# 下一支 5m candle 倒數
-now_utc = pd.Timestamp.now(tz="UTC")
-last_closed_open = df.index[-1]
-if last_closed_open.tzinfo is None:
-    last_closed_open = last_closed_open.tz_localize("UTC")
-next_candle_open = last_closed_open + pd.Timedelta(minutes=5)
-# 下一支「新 candle 出現」= 而家 forming 嗰支收線時刻 = next_candle_open + 5m
-# 實際上：last closed open 係 T，forming 係 T+5m，收線於 T+10m 先變成新 closed
-forming_open = next_candle_open
-forming_close_at = forming_open + pd.Timedelta(minutes=5)
-secs_left = max(0, int((forming_close_at - now_utc).total_seconds()))
-mm, ss = divmod(secs_left, 60)
-st.caption(
-    f"⏱ 5m candle · 只用已收線 · 上一支 `{last_closed_open.strftime('%H:%M')} UTC` · "
-    f"新 candle 仲有 **{mm:02d}:{ss:02d}**"
-)
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric(f"{pair_label}（5m 收線）", f"{state.price:,.2f}")
-c2.metric("24h VWAP", f"{state.vwap:,.2f}", f"{state.vwap_dist_pct:+.3f}%")
-c3.metric("市場模式", state.mode)
-c4.metric("強弱", state.strength)
-c5.metric("建議倉位", f"{suggested_size:,.0f} USDT", f"×{state.size_mult:.2f}")
-
-c6, c7, c8, c9 = st.columns(4)
-c6.metric("4h VWAP 交叉", state.intercept_4h, "continuation" if state.continuation else "choppy")
-c7.metric("6h VWAP 交叉", state.intercept_6h)
-c8.metric("量 / Avg", f"{state.vol:.1f}", f"avg {state.vol_avg:.1f}")
-c9.metric("低量連續", state.low_vol_streak, "暫停 Range" if state.range_paused else "正常")
-
-st.divider()
-left, right = st.columns([1.35, 1])
-
-with left:
-    st.subheader("圖表（24h · 5m 已收線）")
-    st.plotly_chart(build_chart(df, state), use_container_width=True)
-
-with right:
-    st.subheader("訊號面板")
-    render_signal_panel(state, suggested_size)
-
-st.divider()
-with st.expander("策略邏輯摘要", expanded=False):
-    st.markdown(
-        """
+                st.divider()
+                with st.expander("策略邏輯摘要", expanded=False):
+                    st.markdown(
+                        """
 1. **強弱**：現價對 24h rolling VWAP 嘅距離 % → 控制倉位倍數。
 2. **Continuation**：6h 交叉 < 上限 且 4h 交叉 < 上限 → breakout/延續偏向。
 3. **Range**：24h 圖入面搵「同一線位突破／穿梭 ≥5 次」做 high/low；range 要 > Nx 手續費。
@@ -543,13 +534,18 @@ with st.expander("策略邏輯摘要", expanded=False):
 5. **低量暫停**：5m 量 < 門檻 且低過 avg，連續 N 次 → 停 range，轉等 breakout/reversal。
 6. **Breakout/Reversal**：first/second break 且量 < 5×avg → 等下一支；同向量縮跟進，或反向放量做反轉。
 7. **無 Range**：改睇單邊升/跌（trend / continuation）。
-8. **5m Candle**：策略同圖表只用已收線 K；未滿 5 分鐘嘅 forming bar 唔計，收線後先出新一支。
-9. **參數同步**：側邊欄參數寫入共用檔，所有連線約數秒內自動對齊。
-        """
-    )
+8. **5m Candle**：策略同圖表只用已收線 K；未滿 5 分鐘嘅 forming bar 唔計。
+9. **Backtest**：撳上面「Backtest」分頁，用同一套側邊欄參數跑歷史回測。
+                        """
+                    )
+                src_note = LAST_SOURCE.get("klines") or LAST_SOURCE.get("ticker") or "—"
+                st.caption(
+                    f"資料截至 {df.index[-1]} · {symbol} · K線來源 {src_note} · 僅訊號參考，非自動下單"
+                )
+        except Exception as e:
+            st.error(f"載入失敗：{e}")
 
-src_note = LAST_SOURCE.get("klines") or LAST_SOURCE.get("ticker") or "—"
-st.caption(
-    f"資料截至 {df.index[-1]} · {symbol} · K線來源 {src_note} · 僅訊號參考，非自動下單"
-)
+with tab_bt:
+    render_backtest_tab(cfg, default_notional=float(base_notional))
+
 _ = run_btn
