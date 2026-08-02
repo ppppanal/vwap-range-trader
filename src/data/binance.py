@@ -9,6 +9,8 @@ import pandas as pd
 import requests
 
 BASE_URL = "https://api.binance.com/api/v3/klines"
+TICKER_URL = "https://api.binance.com/api/v3/ticker/24hr"
+PRICE_URL = "https://api.binance.com/api/v3/ticker/price"
 
 
 def fetch_klines(
@@ -83,6 +85,31 @@ def fetch_klines_hours(
         return pd.DataFrame()
     df = pd.concat(chunks).sort_index()
     return df[~df.index.duplicated(keep="last")]
+
+
+def fetch_ticker_24h(symbol: str = "BTCUSDT") -> dict:
+    """即時 24h ticker（last / change / high / low / volume）。"""
+    resp = requests.get(TICKER_URL, params={"symbol": symbol.upper()}, timeout=10)
+    resp.raise_for_status()
+    d = resp.json()
+    return {
+        "symbol": d.get("symbol", symbol.upper()),
+        "price": float(d["lastPrice"]),
+        "open": float(d["openPrice"]),
+        "high": float(d["highPrice"]),
+        "low": float(d["lowPrice"]),
+        "change_pct": float(d["priceChangePercent"]),
+        "change": float(d["priceChange"]),
+        "volume": float(d["volume"]),
+        "quote_volume": float(d["quoteVolume"]),
+        "asof": datetime.now(timezone.utc),
+    }
+
+
+def fetch_last_price(symbol: str = "BTCUSDT") -> float:
+    resp = requests.get(PRICE_URL, params={"symbol": symbol.upper()}, timeout=8)
+    resp.raise_for_status()
+    return float(resp.json()["price"])
 
 
 def now_utc() -> datetime:

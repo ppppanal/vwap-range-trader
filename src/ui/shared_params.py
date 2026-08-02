@@ -20,6 +20,8 @@ PARAM_KEYS = [
     "enabled",
     "auto_refresh",
     "refresh_seconds",
+    "live_track",
+    "live_seconds",
     "symbol",
     "lookback_hours",
     "vwap_hours",
@@ -49,6 +51,8 @@ def default_params(base_cfg: dict) -> dict[str, Any]:
         "enabled": True,
         "auto_refresh": True,
         "refresh_seconds": int(base_cfg.get("refresh_seconds", 30)),
+        "live_track": True,
+        "live_seconds": 3,
         "symbol": base_cfg.get("symbol", "BTCUSDT"),
         "lookback_hours": int(base_cfg.get("lookback_hours", 36)),
         "vwap_hours": int(base_cfg["vwap"]["rolling_hours"]),
@@ -81,10 +85,12 @@ def _normalize(params: dict[str, Any], base_cfg: dict) -> dict[str, Any]:
     # 型別修正
     out["enabled"] = bool(out["enabled"])
     out["auto_refresh"] = bool(out["auto_refresh"])
+    out["live_track"] = bool(out["live_track"])
     out["trailing_enabled"] = bool(out["trailing_enabled"])
     out["symbol"] = str(out["symbol"])
     for ik in (
         "refresh_seconds",
+        "live_seconds",
         "lookback_hours",
         "vwap_hours",
         "max_intercept_4h",
@@ -95,6 +101,7 @@ def _normalize(params: dict[str, Any], base_cfg: dict) -> dict[str, Any]:
         "low_vol_consec",
     ):
         out[ik] = int(out[ik])
+    out["live_seconds"] = max(2, min(30, int(out["live_seconds"])))
     for fk in (
         "size_near_pct",
         "size_mid_pct",

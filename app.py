@@ -13,10 +13,17 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import yaml
 
-from src.data.binance import fetch_klines_hours
+from src.data.binance import fetch_klines_hours, fetch_ticker_24h
 from src.indicators.core import compute_indicators
 from src.strategy.engine import StrategyEngine
 from src.ui.shared_params import PARAM_KEYS, default_params, load_shared, save_shared
+
+# 顯示用：Binance BTCUSDT ≈ BTC/USD
+SYMBOL_LABELS = {
+    "BTCUSDT": "BTC/USD",
+    "ETHUSDT": "ETH/USD",
+    "SOLUSDT": "SOL/USD",
+}
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CFG_PATH = ROOT / "config" / "default.yaml"
@@ -186,20 +193,23 @@ who = _display_name()
 shared = load_shared(base_cfg)
 sync_params_into_widgets(shared, base_cfg)
 
-# 參數同步輪詢：對方改完幾秒內會反映
+# 刷新間隔：Live Track 開住時跟 live_seconds；否則跟參數同步
 sync_every = int(os.environ.get("PARAM_SYNC_SECONDS", "3"))
+_live_on = bool(st.session_state.get("p_live_track", True))
+_live_sec = int(st.session_state.get("p_live_seconds", 3))
+poll_sec = max(2, _live_sec if _live_on else sync_every)
 try:
     from streamlit_autorefresh import st_autorefresh
 
-    st_autorefresh(interval=max(2, sync_every) * 1000, key="param_sync_refresh")
+    st_autorefresh(interval=poll_sec * 1000, key="param_sync_refresh")
 except ImportError:
     st.markdown(
-        f"<meta http-equiv='refresh' content='{max(2, sync_every)}'>",
+        f"<meta http-equiv='refresh' content='{poll_sec}'>",
         unsafe_allow_html=True,
     )
 
 st.title("VWAP Range Trader")
-st.caption("5m candle · 24h rolling VWAP · 參數即時共用同步")
+st.caption("5m candle · 24h rolling VWAP · Live Track BTC/USD · 參數即時共用同步")
 
 with st.sidebar:
     st.header("控制面板")
@@ -211,14 +221,23 @@ with st.sidebar:
     param_sync = st.toggle("啟用參數自動同步", value=True, key="param_sync_on")
 
     st.toggle("啟用策略評估", key="p_enabled")
-    st.toggle("自動刷新行情", key="p_auto_refresh")
-    st.slider("刷新秒數", 10, 120, step=5, key="p_refresh_seconds")
+    st.toggle("自動刷新策略/K線", key="p_auto_refresh")
+    st.slider("策略刷新秒數", 10, 120, step=5, key="p_refresh_seconds")
+
+    st.subheader("Live Track")
+    st.toggle("即時追蹤報價 (BTC/USD)", key="p_live_track")
+    st.slider("Live 刷新秒數", 2, 15, step=1, key="p_live_seconds")
 
     st.subheader("市場")
     # selectbox 需要合法 index；用 session 值
     if st.session_state.get("p_symbol") not in SYMBOLS:
         st.session_state["p_symbol"] = SYMBOLS[0]
-    st.selectbox("交易對", SYMBOLS, key="p_symbol")
+    st.selectbox(
+        "交易對",
+        SYMBOLS,
+        format_func=lambda s: f"{SYMBOL_LABELS.get(s, s)} ({s})",
+        key="p_symbol",
+    )
     st.slider("資料回看（小時）", 24, 72, step=6, key="p_lookback_hours")
     st.slider("VWAP Rolling（小時）", 12, 48, step=4, key="p_vwap_hours")
 
@@ -279,19 +298,66 @@ base_notional = ui["base_notional"]
 enabled = ui["enabled"]
 auto_refresh = ui["auto_refresh"]
 refresh_seconds = ui["refresh_seconds"]
+live_track = ui["live_track"]
+live_seconds = ui["live_seconds"]
+pair_label = SYMBOL_LABELS.get(symbol, symbol)
 
 if "engine" not in st.session_state:
     st.session_state.engine = StrategyEngine(cfg)
 else:
     st.session_state.engine.cfg = cfg
 
-# 行情自動刷新（同參數同步分開；用較長間隔時靠上面 autorefresh 一齊跑）
-if auto_refresh and refresh_seconds > sync_every:
-    st.sidebar.caption(f"行情目標刷新 ~{refresh_seconds}s（實際隨同步輪詢）")
+if live_track:
+    st.sidebar.caption(f"Live Track 每 {live_seconds}s 更新報價")
+if auto_refresh:
+    st.sidebar.caption(f"策略/K線 cache ~{min(25, refresh_seconds)}s")
+
+# —— Live Track 報價條（唔使等 5m K 線）——
+if live_track:
+    try:
+        ticker = fetch_ticker_24h(symbol)
+        live_price = ticker["price"]
+        chg = ticker["change_pct"]
+        st.markdown(
+            f"""
+<div style="
+  background: linear-gradient(90deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+  border: 1px solid #3d5a6c; border-radius: 10px; padding: 14px 18px; margin-bottom: 12px;
+">
+  <div style="display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px;">
+    <div>
+      <span style="color:#9fb3c8; font-size:0.85rem;">LIVE · {pair_label}</span>
+      <div style="font-size:2rem; font-weight:700; color:#fff; letter-spacing:0.5px;">
+        ${live_price:,.2f}
+      </div>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:1.25rem; font-weight:600; color:{'#2ecc71' if chg >= 0 else '#e74c3c'};">
+        {'+' if chg >= 0 else ''}{chg:.2f}%
+      </div>
+      <div style="color:#9fb3c8; font-size:0.8rem;">
+        24h H {ticker['high']:,.0f} · L {ticker['low']:,.0f} · Vol {ticker['volume']:,.0f} BTC
+      </div>
+      <div style="color:#6c879a; font-size:0.75rem;">
+        更新 {ticker['asof'].strftime('%H:%M:%S')} UTC · 來源 Binance {symbol}
+      </div>
+    </div>
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        # 相對 VWAP 即時距離（用上一輪策略 VWAP 若有）
+        if "last_vwap" in st.session_state and st.session_state.last_vwap:
+            dist = (live_price - st.session_state.last_vwap) / st.session_state.last_vwap * 100.0
+            st.caption(f"現價 vs 24h VWAP：{dist:+.3f}%（VWAP {st.session_state.last_vwap:,.2f}）")
+    except Exception as e:
+        st.warning(f"Live Track 暫時拎唔到報價：{e}")
 
 if not enabled:
     st.warning("策略評估已關閉。打開側邊欄「啟用策略評估」後再開始。")
     st.stop()
+
 
 @st.cache_data(ttl=25, show_spinner=False)
 def _cached_klines(sym: str, hours: int):
@@ -303,6 +369,7 @@ try:
         raw = _cached_klines(symbol, int(lookback_hours))
     df = compute_indicators(raw, cfg)
     state = st.session_state.engine.evaluate(df)
+    st.session_state.last_vwap = state.vwap
 except Exception as e:
     st.error(f"載入失敗：{e}")
     st.stop()
@@ -311,7 +378,7 @@ sig = state.signal
 suggested_size = base_notional * float(sig.size_mult or state.size_mult)
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("現價", f"{state.price:,.2f}")
+c1.metric(f"{pair_label}（5m close）", f"{state.price:,.2f}")
 c2.metric("24h VWAP", f"{state.vwap:,.2f}", f"{state.vwap_dist_pct:+.3f}%")
 c3.metric("市場模式", state.mode)
 c4.metric("強弱", state.strength)
